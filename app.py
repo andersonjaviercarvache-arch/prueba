@@ -1,63 +1,60 @@
 import streamlit as st
-import requests
+import math
 
 # Configuración de la página
 st.set_page_config(page_title="Dimensionamiento PV", layout="centered")
 
+# Título principal estricto de tu aplicación
 st.title("Sistema de ingeniería de costos y control financiero")
 st.subheader("Módulo de Dimensionamiento y Protecciones")
 
-# Opciones de la interfaz
-modelos_disponibles = [
-    "Huawei-SUN2000-5KTL", 
-    "Huawei-SUN2000-10KTL", 
-    "Huawei-SUN2000-60KTL",
-    "Victron-MultiPlus-3000"
-]
+# Base de datos interna de inversores
+INVERSORES_DB = {
+    "Huawei-SUN2000-5KTL": {"potencia_w": 5000, "paneles_max_por_string": 12},
+    "Huawei-SUN2000-10KTL": {"potencia_w": 10000, "paneles_max_por_string": 15},
+    "Huawei-SUN2000-60KTL": {"potencia_w": 60000, "paneles_max_por_string": 20},
+    "Victron-MultiPlus-3000": {"potencia_w": 3000, "paneles_max_por_string": 8}
+}
 
-modelo_seleccionado = st.selectbox("Seleccione el modelo del inversor", modelos_disponibles)
+# Interfaz de usuario para ingresar datos
+modelo_seleccionado = st.selectbox("Seleccione el modelo del inversor", list(INVERSORES_DB.keys()))
 cantidad_paneles = st.number_input("Cantidad de paneles solares", min_value=1, value=10, step=1)
 
-# Botón para calcular
+# Botón de cálculo
 if st.button("Calcular Protecciones y Circuitos"):
-    # Dirección de nuestra API local
-    url_api = "http://127.0.0.1:8000/calcular_protecciones"
+    inversor = INVERSORES_DB[modelo_seleccionado]
     
-    # Datos que enviamos a la API
-    datos_a_enviar = {
-        "modelo_inversor": modelo_seleccionado,
-        "cantidad_paneles": cantidad_paneles
-    }
+    # 1. Cálculo de Strings (Circuitos)
+    cantidad_circuitos = math.ceil(cantidad_paneles / inversor["paneles_max_por_string"])
     
-    try:
-        # Hacemos la petición a la API
-        respuesta = requests.post(url_api, json=datos_a_enviar)
+    # 2. Protecciones DC 
+    fusibles_dc = cantidad_circuitos * 2
+    breakers_dc = cantidad_circuitos
+    
+    # 3. Protecciones AC 
+    voltaje_ac = 220
+    corriente_nominal_ac = inversor["potencia_w"] / voltaje_ac
+    capacidad_breaker_ac = math.ceil(corriente_nominal_ac * 1.25)
+    cantidad_breakers_ac = 2 
+    
+    # --- MOSTRAR RESULTADOS EN PANTALLA ---
+    st.success("Cálculo de dimensionamiento completado")
+    
+    col_principal, _ = st.columns([1, 1])
+    with col_principal:
+        st.metric("Total de Circuitos (Strings)", cantidad_circuitos)
+    
+    st.divider()
+    
+    # Separación clara de terminales como en los gabinetes reales
+    col_dc, col_ac = st.columns(2)
+    
+    with col_dc:
+        st.write("### Terminales DC")
+        st.info(f"**Fusibles DC necesarios:** {fusibles_dc}\n\n**Breakers DC necesarios:** {breakers_dc}")
+        st.caption("2 fusibles y 1 breaker por cada circuito ingresando al inversor.")
         
-        if respuesta.status_code == 200:
-            resultado = respuesta.json()
-            
-            # Mostrar resultados en pantalla
-            st.success("Cálculo realizado con éxito")
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Total de Strings", resultado["total_circuitos_strings"])
-            
-            st.divider()
-            
-            col_dc, col_ac = st.columns(2)
-            with col_dc:
-                st.write("### Gabinete DC")
-                st.write(f"- **Fusibles necesarios:** {resultado['fusibles_dc']}")
-                st.write(f"- **Breakers DC necesarios:** {resultado['breakers_dc']}")
-                
-            with col_ac:
-                st.write("### Gabinete AC")
-                st.write(f"- **Breakers AC necesarios:** {resultado['breakers_ac']}")
-                st.write(f"- **Amperaje recomendado:** {resultado['amperaje_breaker_ac']} A")
-                
-        else:
-            st.error("Error al comunicarse con la API. Revisa que Uvicorn esté corriendo.")
-            
-    except requests.exceptions.ConnectionError:
-        st.error("No se pudo conectar a la API. ¿Aseguraste ejecutar 'uvicorn api:app --reload' en otra terminal?")
+    with col_ac:
+        st.write("### Terminales AC")
+        st.warning(f"**Breakers AC necesarios:** {cantidad_breakers_ac}\n\n**Amperaje recomendado:** {capacidad_breaker_ac} A")
+        st.caption("Cálculo a 220V con factor de seguridad del 25%.")
