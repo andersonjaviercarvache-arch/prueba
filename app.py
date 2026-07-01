@@ -1,62 +1,63 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-import math
+import streamlit as st
+import requests
 
-# Inicializamos la API con el nombre correcto de tu aplicación
-app = FastAPI(title="Sistema de ingeniería de costos y control financiero - API Fotovoltaica")
+# Configuración de la página
+st.set_page_config(page_title="Dimensionamiento PV", layout="centered")
 
-# Base de datos simulada de inversores (puedes conectarlo a una DB real luego)
-INVERSORES_DB = {
-    "Huawei-SUN2000-5KTL": {"potencia_w": 5000, "paneles_max_por_string": 12},
-    "Huawei-SUN2000-10KTL": {"potencia_w": 10000, "paneles_max_por_string": 15},
-    "Victron-MultiPlus-3000": {"potencia_w": 3000, "paneles_max_por_string": 8}
-}
+st.title("Sistema de ingeniería de costos y control financiero")
+st.subheader("Módulo de Dimensionamiento y Protecciones")
 
-# Modelo de datos esperado en la petición
-class PeticionDimensionamiento(BaseModel):
-    modelo_inversor: str
-    cantidad_paneles: int
+# Opciones de la interfaz
+modelos_disponibles = [
+    "Huawei-SUN2000-5KTL", 
+    "Huawei-SUN2000-10KTL", 
+    "Huawei-SUN2000-60KTL",
+    "Victron-MultiPlus-3000"
+]
 
-@app.post("/calcular_protecciones")
-def calcular_protecciones(datos: PeticionDimensionamiento):
-    # 1. Validar si el inversor existe en nuestra base de datos
-    if datos.modelo_inversor not in INVERSORES_DB:
-        raise HTTPException(status_code=404, detail="Modelo de inversor no encontrado")
+modelo_seleccionado = st.selectbox("Seleccione el modelo del inversor", modelos_disponibles)
+cantidad_paneles = st.number_input("Cantidad de paneles solares", min_value=1, value=10, step=1)
+
+# Botón para calcular
+if st.button("Calcular Protecciones y Circuitos"):
+    # Dirección de nuestra API local
+    url_api = "http://127.0.0.1:8000/calcular_protecciones"
     
-    inversor = INVERSORES_DB[datos.modelo_inversor]
-    
-    # 2. Calcular cantidad de circuitos (Strings)
-    # Se divide la cantidad de paneles entre el máximo permitido por string y se redondea hacia arriba
-    cantidad_circuitos = math.ceil(datos.cantidad_paneles / inversor["paneles_max_por_string"])
-    
-    # 3. Calcular protecciones en DC
-    fusibles_dc = cantidad_circuitos * 2
-    breakers_dc = cantidad_circuitos
-    
-    # 4. Calcular protecciones en AC
-    # I = (Potencia / Voltaje) * Factor de seguridad (1.25)
-    voltaje_ac = 220
-    corriente_nominal_ac = inversor["potencia_w"] / voltaje_ac
-    capacidad_breaker_ac = math.ceil(corriente_nominal_ac * 1.25)
-    cantidad_breakers_ac = 2 # Según tu requerimiento
-    
-    # 5. Retornar el JSON con los resultados
-    return {
-        "resumen_sistema": {
-            "inversor_seleccionado": datos.modelo_inversor,
-            "potencia_inversor_w": inversor["potencia_w"],
-            "total_paneles": datos.cantidad_paneles,
-            "total_circuitos_strings": cantidad_circuitos
-        },
-        "protecciones_DC": {
-            "cantidad_fusibles": fusibles_dc,
-            "cantidad_breakers": breakers_dc,
-            "nota": "Instalación en gabinete DC"
-        },
-        "protecciones_AC": {
-            "cantidad_breakers": cantidad_breakers_ac,
-            "amperaje_recomendado_breaker": capacidad_breaker_ac,
-            "voltaje_calculo": voltaje_ac,
-            "nota": "Instalación en gabinete AC"
-        }
+    # Datos que enviamos a la API
+    datos_a_enviar = {
+        "modelo_inversor": modelo_seleccionado,
+        "cantidad_paneles": cantidad_paneles
     }
+    
+    try:
+        # Hacemos la petición a la API
+        respuesta = requests.post(url_api, json=datos_a_enviar)
+        
+        if respuesta.status_code == 200:
+            resultado = respuesta.json()
+            
+            # Mostrar resultados en pantalla
+            st.success("Cálculo realizado con éxito")
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total de Strings", resultado["total_circuitos_strings"])
+            
+            st.divider()
+            
+            col_dc, col_ac = st.columns(2)
+            with col_dc:
+                st.write("### Gabinete DC")
+                st.write(f"- **Fusibles necesarios:** {resultado['fusibles_dc']}")
+                st.write(f"- **Breakers DC necesarios:** {resultado['breakers_dc']}")
+                
+            with col_ac:
+                st.write("### Gabinete AC")
+                st.write(f"- **Breakers AC necesarios:** {resultado['breakers_ac']}")
+                st.write(f"- **Amperaje recomendado:** {resultado['amperaje_breaker_ac']} A")
+                
+        else:
+            st.error("Error al comunicarse con la API. Revisa que Uvicorn esté corriendo.")
+            
+    except requests.exceptions.ConnectionError:
+        st.error("No se pudo conectar a la API. ¿Aseguraste ejecutar 'uvicorn api:app --reload' en otra terminal?")
